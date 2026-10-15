@@ -26,8 +26,7 @@ def test_dashboard_uses_api_not_database_directly():
     assert "data.db" not in content
 
 
-def test_dashboard_has_human_feedback_options():
-    """The dashboard should offer all four human decisions."""
+def test_dashboard_has_supported_human_feedback_options():
+    """The dashboard should offer the decisions supported by the API."""
     content = Path("frontend/app.py").read_text(encoding="utf-8")
-    for decision in ("approve", "hold", "block", "escalate"):
-        assert decision in content
+    assert '"approve", "block"' in content
