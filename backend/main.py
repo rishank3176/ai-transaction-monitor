@@ -1,6 +1,7 @@
 import sqlite3
+from typing import Literal
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from data.db import DB_PATH, update_status
 from backend.pipeline import process_transaction
 
@@ -20,6 +21,32 @@ def process(txn_id: int):
     result = process_transaction(txn_id)
     if result is None:
         raise HTTPException(404, 'Transaction not found')
+    return result
+
+
+class NewTransaction(BaseModel):
+    customer_id: int = Field(ge=1)
+    type: Literal['TRANSFER', 'CASH_OUT', 'PAYMENT']
+    amount: float = Field(gt=0)
+    old_balance: float = Field(ge=0)
+    new_balance: float = Field(ge=0)
+
+
+@app.post('/submit')
+def submit(tx: NewTransaction):
+    # Save a brand-new transaction, then run it through the same pipeline
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute('SELECT COALESCE(MAX(transaction_id), 0) FROM transactions').fetchone()
+    new_id = row[0] + 1
+    conn.execute(
+        '''INSERT INTO transactions
+           (transaction_id, customer_id, step, type, amount,
+            old_balance, new_balance, is_fraud, status)
+           VALUES (?, ?, 0, ?, ?, ?, ?, 0, 'pending')''',
+        (new_id, tx.customer_id, tx.type, tx.amount, tx.old_balance, tx.new_balance))
+    conn.commit()
+    conn.close()
+    result = process_transaction(new_id)
     return result
 
 
