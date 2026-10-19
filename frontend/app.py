@@ -119,3 +119,8 @@ if result and st.session_state.get("last_result_id") == selected_id:
             st.success("Feedback saved. The model was not retrained.")
         except requests.RequestException as exc:
             st.error(f"Feedback could not be saved: {exc}")
+st.divider()
+st.subheader("Learning from human feedback")
+if st.button("Update agent from feedback"):
+    from learning.feedback import update_utilities
+    st.json(update_utilities())

@@ -1,54 +1,32 @@
+import copy
+import json
+import sqlite3
+from data.db import DB_PATH
+from agent.utility import DEFAULT_UTILITY, CONFIG_PATH
 
-"""Save human review feedback for later analysis."""
 
-from data.db import DB_PATH, VALID_DECISIONS, _connect
+def update_utilities(step=1.0):
+    # Recompute the utility table from the defaults plus ALL human feedback so far
+    util = copy.deepcopy(DEFAULT_UTILITY)
+    conn = sqlite3.connect(DB_PATH)
+    rows = conn.execute('SELECT agent_decision, human_decision FROM feedback').fetchall()
+    conn.close()
 
+    for agent_d, human_d in rows:
+        if agent_d not in util:
+            continue
+        if human_d == 'approve' and agent_d in ('hold', 'block', 'escalate'):
+            util[agent_d]['legit'] -= step      # false alarm: this action costs more
+        elif human_d == 'block':
+            if agent_d in ('approve', 'hold'):
+                util[agent_d]['fraud'] -= step  # fraud was under-reacted to
+            else:
+                util[agent_d]['fraud'] += step  # the agent was right: reward
 
-def save_feedback(txn_id: int, human_decision: str) -> dict:
-    """Save a human decision after an agent decision exists."""
+    for a in util:
+        for k in util[a]:
+            util[a][k] = max(-200, min(200, util[a][k]))
 
-    if human_decision not in VALID_DECISIONS:
-        raise ValueError(
-            f"human_decision must be one of {sorted(VALID_DECISIONS)}"
-        )
-
-    if not DB_PATH.exists():
-        raise FileNotFoundError(
-            f"Database not found at {DB_PATH}. "
-            "Run: python -m data.build_db"
-        )
-
-    with _connect() as conn:
-        row = conn.execute(
-            """
-            SELECT decision
-            FROM actions_log
-            WHERE transaction_id = ?
-            ORDER BY id DESC
-            LIMIT 1
-            """,
-            (txn_id,),
-        ).fetchone()
-
-        if row is None:
-            raise ValueError(
-                f"Transaction {txn_id} has no agent decision to review"
-            )
-
-        agent_decision = row["decision"]
-
-        conn.execute(
-            """
-            INSERT INTO feedback
-                (transaction_id, agent_decision, human_decision)
-            VALUES (?, ?, ?)
-            """,
-            (txn_id, agent_decision, human_decision),
-        )
-
-    return {
-        "transaction_id": txn_id,
-        "agent_decision": agent_decision,
-        "human_decision": human_decision,
-        "saved": True,
-    }
+    with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
+        json.dump(util, f, indent=2)
+    return util
