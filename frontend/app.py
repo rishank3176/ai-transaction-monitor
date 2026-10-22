@@ -6,7 +6,7 @@ import pandas as pd
 import requests
 import streamlit as st
 
-st.set_page_config(page_title='AI Transaction Monitor', page_icon='🛡️', layout='wide')
+st.set_page_config(page_title='SentinelAI', page_icon='🛡️', layout='wide')
 
 st.markdown('''
 <style>
@@ -19,7 +19,7 @@ st.markdown('''
 </style>
 ''', unsafe_allow_html=True)
 
-st.title('🛡️ AI Transaction Monitor')
+st.title('🛡️ SentinelAI')
 st.caption('Anomaly detection, a utility-based agent and automated response. '
            'Academic prototype on synthetic PaySim data, not for real payments.')
 
