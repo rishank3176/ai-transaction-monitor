@@ -6,7 +6,7 @@ from agent.agent import decide
 PROFILE = {'customer_id': 1, 'num_transactions': 30, 'average_amount': 5000.0,
            'max_amount': 20000.0, 'past_flags': 0}
 
-# (name, transaction, what we expect)
+
 CASES = [
     ('normal small payment',
      {'transaction_id': 1, 'customer_id': 1, 'type': 'PAYMENT', 'amount': 40.0,

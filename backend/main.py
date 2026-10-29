@@ -4,9 +4,10 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from data.db import DB_PATH, update_status
 from backend.pipeline import process_transaction
+from backend.auth import router as customer_router
 
-app = FastAPI(title='AI Transaction Monitor')
-
+app = FastAPI(title='SentinelAI')
+app.include_router(customer_router)
 
 def query(sql, params=()):
     conn = sqlite3.connect(DB_PATH)
@@ -34,7 +35,6 @@ class NewTransaction(BaseModel):
 
 @app.post('/submit')
 def submit(tx: NewTransaction):
-    # Save a brand-new transaction, then run it through the same pipeline
     conn = sqlite3.connect(DB_PATH)
     row = conn.execute('SELECT COALESCE(MAX(transaction_id), 0) FROM transactions').fetchone()
     new_id = row[0] + 1
@@ -79,7 +79,7 @@ def actions(limit: int = 200):
 
 class Feedback(BaseModel):
     transaction_id: int
-    human_decision: str      # approve or block
+    human_decision: str     
 
 
 @app.post('/feedback')

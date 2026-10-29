@@ -1,19 +1,28 @@
 """
 Utility-based agent for transaction monitoring and decision making.
 
-Combines ML anomaly detection model scores with customer profile history to estimate
-adjusted fraud probabilities and chooses optimal actions based on expected utility.
+Combines the ML anomaly model's fraud probability with the customer's transaction
+history. The history changes both the fraud probability and the utility values
+(see agent/behaviour.py), and the agent then chooses the action with the highest
+expected utility.
 """
 
 from data.profile import build_customer_profile
-from agent.utility import choose_action
+from agent.utility import choose_action, load_utility
+from agent.behaviour import (
+    BLOCK_MIN_MODEL_P,
+    adjust_utility,
+    apply_risk_shift,
+    assess_behaviour,
+    neutral_behaviour,
+)
 
 
 class UtilityAgent:
     """
-    UtilityAgent perceives transactions and anomaly model results,
-    updates state from customer profile history, adjusts fraud probability,
-    and decides on the best action via maximum expected utility.
+    Perceives a transaction and the model output, updates its state from the
+    customer's history, adjusts risk and utilities, and picks the action with
+    the maximum expected utility.
     """
 
     def __init__(self):
@@ -21,6 +30,11 @@ class UtilityAgent:
         self.score_result = None
         self.profile = None
         self.adjustments = []
+        self.behaviour = None
+        self.p_model = 0.0
+        self.base_utility = None
+        self.utility = None
+        self.guard_note = None
 
     def perceive(self, txn, score_result):
         """
@@ -30,6 +44,8 @@ class UtilityAgent:
         self.score_result = score_result
         self.profile = None
         self.adjustments = []
+        self.behaviour = None
+        self.guard_note = None
 
     def update_state(self, profile=None):
         """
@@ -54,96 +70,90 @@ class UtilityAgent:
 
     def estimate_p_fraud(self):
         """
-        Start with model's p_fraud and adjust it using customer history.
-
-        Rules:
-        1. Calculate txn amount / average_amount (avoid div by zero if <= 0).
-        2. If num_transactions >= 5 and amount > 10 * average: add 0.15.
-        3. Else if amount > 5 * average: add 0.07.
-        4. If past_flags >= 2: add 0.05.
-        5. Store understandable explanations for every applied adjustment.
-        6. Clamp final probability between 0.0 and 1.0.
+        Start from the model's fraud probability and update it with the customer's
+        behaviour: unusual amount or type raises it, typical behaviour of a trusted
+        customer lowers it slightly. Also stores the behaviour assessment that
+        choose_action() uses to personalise the utilities.
         """
-        raw_p = float(self.score_result.get('p_fraud', 0.0))
-        p = raw_p
-        self.adjustments = []
-
-        if self.profile and isinstance(self.txn, dict):
-            avg_amount = float(self.profile.get('average_amount', 0.0) or 0.0)
-            num_txns = int(self.profile.get('num_transactions', 0) or 0)
-            past_flags = int(self.profile.get('past_flags', 0) or 0)
-            current_amount = float(self.txn.get('amount', 0.0) or 0.0)
-
-            ratio = (current_amount / avg_amount) if avg_amount > 0 else 0.0
-
-            if num_txns >= 5 and ratio > 10.0:
-                p += 0.15
-                self.adjustments.append(
-                    f"amount is {ratio:.1f}x customer average with established history (+0.15)"
-                )
-            elif ratio > 5.0:
-                p += 0.07
-                self.adjustments.append(
-                    f"amount is {ratio:.1f}x customer average (+0.07)"
-                )
-
-            if past_flags >= 2:
-                p += 0.05
-                self.adjustments.append(
-                    f"customer has {past_flags} past flags (+0.05)"
-                )
-
-        p = max(0.0, min(1.0, p))
-        return p
+        self.p_model = max(0.0, min(1.0, float(self.score_result.get('p_fraud', 0.0) or 0.0)))
+        if isinstance(self.txn, dict) and self.profile:
+            self.behaviour = assess_behaviour(self.txn, self.profile)
+        else:
+            self.behaviour = neutral_behaviour()
+        self.adjustments = list(self.behaviour['notes'])
+        p = apply_risk_shift(self.p_model, self.behaviour['risk_shift'])
+        p = max(p, self.behaviour['risk_floor'])
+        return max(0.0, min(1.0, p))
 
     def choose_action(self, p):
         """
-        Use utility-based decision rule from agent.utility.
+        Maximum expected utility using the customer-specific utility table.
+        A block must be supported by the ML model: unusual behaviour alone
+        can raise a transaction to hold or escalate, but not to block.
         """
-        return choose_action(p)
+        if self.behaviour is None:
+            self.behaviour = neutral_behaviour()
+        self.base_utility = load_utility()
+        self.utility = adjust_utility(self.base_utility, self.behaviour)
+        action, eu, gap = choose_action(p, self.utility)
+        self.guard_note = None
+
+        if action == 'block' and self.p_model < BLOCK_MIN_MODEL_P:
+            ranked = sorted(((a, v) for a, v in eu.items() if a != 'block'),
+                            key=lambda item: item[1], reverse=True)
+            action = ranked[0][0]
+            gap = ranked[0][1] - ranked[1][1] if len(ranked) > 1 else 0.0
+            self.guard_note = ('block not applied: the model risk is low and unusual '
+                               'behaviour alone cannot justify blocking')
+        return action, eu, gap
 
     def decide(self, txn, score_result, profile=None):
         """
-        Run complete decision pipeline:
-        1. Perceive transaction and score.
-        2. Update customer-history state.
-        3. Estimate adjusted fraud probability.
-        4. Choose action using maximum expected utility.
-        5. Calculate confidence: 0.5 + 0.5 * min(1.0, utility_gap / 30).
-        6. Combine model reasons with history explanations.
-        7. Format reasoning and return required dictionary.
+        Run the complete decision pipeline:
+        1. Perceive transaction and model score.
+        2. Update the customer-history state.
+        3. Update the fraud probability and the utilities from that history.
+        4. Choose the action with the highest expected utility.
+        5. Confidence = 0.5 + 0.5 * min(1.0, utility_gap / 30).
+        6. Also work out what the decision would have been without history.
         """
         self.perceive(txn, score_result)
         self.update_state(profile)
         p_adj = self.estimate_p_fraud()
         best_action, eu, utility_gap = self.choose_action(p_adj)
 
+        base_action, base_eu, _ = choose_action(self.p_model, self.base_utility)
+
         confidence = 0.5 + 0.5 * min(1.0, utility_gap / 30.0)
 
         model_reasons = self.score_result.get('top_reasons', []) if isinstance(self.score_result, dict) else []
-        all_reasons = list(model_reasons) + list(self.adjustments)
+        history_reasons = list(self.adjustments)
+        if self.guard_note:
+            history_reasons.append(self.guard_note)
+        all_reasons = list(model_reasons) + history_reasons
         reasons_str = "; ".join(all_reasons) if all_reasons else "standard evaluation"
 
         reasoning = (
             f"Action '{best_action}' selected based on expected utility with adjusted "
-            f"p_fraud={p_adj:.3f}. Reasons: {reasons_str}."
+            f"p_fraud={p_adj:.3f} (model {self.p_model:.3f}). Reasons: {reasons_str}."
         )
 
         txn_id = txn.get('transaction_id') if isinstance(txn, dict) else None
-
-        rounded_eu = {k: round(v, 1) for k, v in eu.items()}
 
         return {
             'transaction_id': txn_id,
             'decision': best_action,
             'confidence': round(confidence, 3),
             'p_fraud': round(p_adj, 3),
-            'expected_utilities': rounded_eu,
-            'reasoning': reasoning
+            'expected_utilities': {k: round(v, 1) for k, v in eu.items()},
+            'reasoning': reasoning,
+            'p_model': round(self.p_model, 3),
+            'decision_without_history': base_action,
+            'baseline_expected_utilities': {k: round(v, 1) for k, v in base_eu.items()},
+            'behaviour': self.behaviour,
         }
 
 
-# Module-level agent instance
 _agent_instance = UtilityAgent()
 
 

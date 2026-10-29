@@ -17,7 +17,6 @@ def main():
 
     print("Loading PaySim dataset...")
 
-    # Read only the columns required by our project.
     df = pd.read_csv(
         CSV_PATH,
         usecols=[
@@ -32,12 +31,10 @@ def main():
 
     print(f"Loaded {len(df):,} rows.")
 
-    # Keep the transaction types selected for this project.
     df = df[
         df["type"].isin(["TRANSFER", "CASH_OUT", "PAYMENT"])
     ]
 
-    # Sample up to 400 fraud cases and 30,000 normal cases.
     fraud_rows = df[df["isFraud"] == 1]
     normal_rows = df[df["isFraud"] == 0]
 
@@ -54,7 +51,6 @@ def main():
     df = pd.concat([fraud, normal], ignore_index=True)
     df = df.sample(frac=1, random_state=42).reset_index(drop=True)
 
-    # Synthetic customer IDs for this prototype.
     rng = np.random.default_rng(42)
     df["customer_id"] = rng.integers(
         1, 501, size=len(df)
@@ -85,7 +81,6 @@ def main():
         ]
     ]
 
-    # Create the SQLite database and tables.
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
     with sqlite3.connect(DB_PATH) as conn:

@@ -1,7 +1,6 @@
 import sqlite3
 from data.db import DB_PATH, update_status
 
-# Status names follow data/db.py: pending, approve, hold, block, escalate
 STATUS = {'approve': 'approve', 'hold': 'hold',
           'block': 'block', 'escalate': 'escalate'}
 MIN_CONFIDENCE_TO_BLOCK = 0.7
@@ -9,7 +8,6 @@ MAX_AUTO_BLOCK_AMOUNT = 5000000
 
 
 def apply_guardrails(decision):
-    # Safety rules the agent cannot override
     d = dict(decision)
     d['decided_by'] = 'agent'
     if d['decision'] == 'block' and d['confidence'] < MIN_CONFIDENCE_TO_BLOCK:
@@ -36,7 +34,6 @@ def log_action(d):
 
 
 def send_alert(d):
-    # Simple version: print. Optional upgrade: email (smtplib) or a Telegram webhook.
     tid = d['transaction_id']
     action = d['decision'].upper()
     reason = d['reasoning']

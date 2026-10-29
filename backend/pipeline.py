@@ -1,4 +1,5 @@
 from data.db import get_transaction
+from data.customers import save_risk
 from model.anomaly import score_transaction
 from agent.agent import decide
 from backend.responder import execute_action
@@ -13,4 +14,5 @@ def process_transaction(txn_id):
     decision['amount'] = txn['amount']
     final = execute_action(decision)
     final['anomaly_score'] = score_result['score']
+    save_risk(txn_id, score_result['score'], score_result['p_fraud'], decision['p_fraud'])
     return final
